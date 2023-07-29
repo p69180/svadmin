@@ -43,7 +43,7 @@ This repository contains utility scripts for server administration.
    - Example
      ```
      # bash script
-     # Suppose you are currently at the root directory of this repository
+     # Suppose you are currently at the root of this repository
      
      rstudiodir=/where/to/install/rstudio_server
      mkdir $rstudiodir
