@@ -60,6 +60,7 @@ This repository contains utility scripts for server administration.
      ./rstudio/run_after_env_creation.sh --condapf $condapf
      ```
  4. Run Rstudio server with [rstudio/run_conda_rstudio.sh](rstudio/run_conda_rstudio.sh)
+    - Must be run with root previlege.
     - The path to rstudio server directory will be `<rstudiodir>/usr/lib/rstudio-server`. \<rstudiodir\> is the argument used when running [rstudio/download_install.sh](rstudio/download_install.sh)
     - Example
       ```
@@ -73,7 +74,7 @@ This repository contains utility scripts for server administration.
         --condapf $condapf \
         --rserverdir $rserverdir
       ```
-5. Login to Rstudio server from remote host
+6. Login to Rstudio server from remote host
    - Access to the machine where Rstudio is running, with the port number used when running [rstudio/run_conda_rstudio.sh](rstudio/run_conda_rstudio.sh)
 
 
