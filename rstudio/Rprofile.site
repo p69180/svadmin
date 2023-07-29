@@ -1,0 +1,13 @@
+# 230224
+
+# Add user-specific library path
+VER_XY__ = paste0(R.version$major, ".", strsplit(R.version$minor, "\\.")[[1]][1])
+PLATFORM__ = R.version$platform
+USERLIB__ = file.path(Sys.getenv("HOME"), "R", PLATFORM__, VER_XY__)
+
+if (!file.exists(USERLIB__)) {
+	dir.create(USERLIB__, recursive=TRUE, mode="0755")
+}
+.libPaths(USERLIB__)
+
+rm(VER_XY__, PLATFORM__, USERLIB__)

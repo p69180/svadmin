@@ -1,0 +1,14 @@
+- First, create a conda environment named "r-reticulate"
+
+- Run R in any conda environment (with the same conda executable as "r-reticulate" environment),
+
+- and execute the code below:
+	tensorflow::install_tensorflow(
+		method = "conda", 
+		conda = Sys.getenv("CONDA_EXE"), 
+		envname = file.path( dirname(dirname(Sys.getenv("CONDA_EXE"))), "envs", "r-reticulate" ),
+		conda_python_version = "3.6.13", 
+		python_version = "3.6.13"
+	)
+
+- Must delete /root/.cache/pip afterward

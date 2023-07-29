@@ -1,0 +1,7 @@
+THINGS TO DO AFTER CREATING A NEW CONDA ENVIRONMENT
+1. Activate the conda environment.
+2. Source "SOURCE_AFTER_ENV_CREATION.sh". (Running within a subshell does not work properly.) This script
+	#- copies "Renviron.site" into "${CONDA_PREFIX}/lib/R/etc/" (sets RETICULATE_PYTHON)
+	- copies "Rprofile.site" into "${CONDA_PREFIX}/lib/R/etc/" (sets user-specific library path)
+	- installs R packages not properly managed by conda
+
