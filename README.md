@@ -26,6 +26,7 @@ This repository contains utility scripts for server administration.
 
 - [rstudio/run_conda_rstudio.sh](rstudio/run_conda_rstudio.sh)
   - What it does: Launches an rstudio server instance using a specific conda environment.
+  - ***Must be run with root previlege!!***
   - Arguments
     - --port : Set an appropriate port number
     - --workingdir : This need not be created in advance. If already existing, the existing directory is deleted, then a new one with the same name is created.
