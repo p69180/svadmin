@@ -90,13 +90,18 @@ function edit_Makeconf
     # This forces R to use C libraries within the conda environment when installing a new R package.
     # Without this, R uses system C libraries which frequently results in compilation failure
 
-	cp ${conda_R_etc}/Makeconf ${conda_R_etc}/Makeconf.bak
+    makeconf_original=${conda_R_etc}/Makeconf
+    makeconf_backup=${conda_R_etc}/Makeconf.backup
+    makeconf_tmp=${conda_R_etc}/Makeconf.tmp
+
+	cp ${makeconf_original} ${makeconf_backup}
 	awk \
 		-v pat="([[:blank:]])(x86[^[:blank:]]+)" \
 		-v bin="${conda_bin}" \
-		'{print gensub(pat, "\\1" bin "/" "\\2", "g", $0)}' ${conda_R_etc}/Makeconf \
-        > ${conda_R_etc}/tmp
-	mv -f ${conda_R_etc}/tmp ${conda_R_etc}/Makeconf
+		'{print gensub(pat, "\\1" bin "/" "\\2", "g", $0)}' $makeconf_original \
+        > $makeconf_tmp
+	mv $makeconf_tmp $makeconf_original
+    chmod --reference $makeconf_backup $makeconf_original
 }
 
 
