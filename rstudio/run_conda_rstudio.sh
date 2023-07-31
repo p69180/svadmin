@@ -15,6 +15,7 @@ function usage {
     echo -e "\t--workingdir: Rstudio server working directory. \"/var/run/rstudio-server\" directory tree is automatically created under this directory."
     echo -e "\t--condapf: Conda environment directory, which looks like \"*/miniconda3/envs/<envname>\""
     echo -e "\t--rserverdir: Rstudio server top directory, which looks like \"*/usr/lib/rstudio-server\""
+    echo -e "\t--clear-workingdir: (FLAG) If set, recursively remove existing 'workingdir'"
     exit 1
 }
 
@@ -29,6 +30,7 @@ function rootwarn {
 
 function argparse {
     declare -gA defaults
+    defaults[clear_workingdir]=false
 
     required_args=(
         port
@@ -49,6 +51,8 @@ function argparse {
                 shift ; args[condapf]="$1" ; shift ;;
             --rserverdir)
                 shift ; args[rserverdir]="$1" ; shift ;;
+            --clear-workingdir)
+                args[clear_workingdir]=true ; shift ;;
             -h|--help|*)
                 usage ;;
         esac
@@ -84,15 +88,17 @@ function argparse {
 function WD_handler {
     if [[ -e ${args[workingdir]} ]] ; then
         if [[ -d ${args[workingdir]} ]] ; then
-            echo "A directory with the name specified by \"--workingdir\" (${args[workingdir]}) argument exists."
-            echo "If you enter 'yes', the existing directory will be removed and a new directory with the same name will be created."
-            echo "If you enter anything other, the program will quit."
-            read input
-            if [[ $input = yes ]] ; then
-                rm -rf ${args[workingdir]}
-                mkdir ${args[workingdir]}
-            else
-                exit 1
+            if ${args[clear_workingdir]} ; then
+                echo "A directory with the name specified by \"--workingdir\" (${args[workingdir]}) argument exists."
+                echo "If you enter 'yes', the existing directory will be removed and a new directory with the same name will be created."
+                echo "If you enter anything other, the program will quit."
+                read input
+                if [[ $input = yes ]] ; then
+                    rm -rf ${args[workingdir]}
+                    mkdir ${args[workingdir]}
+                else
+                    exit 1
+                fi
             fi
         else
             echo "There exists a non-directory file with the name specified by \"--workingdir\" argument."
@@ -114,8 +120,6 @@ function main {
     lib_path=${args[condapf]}/lib # contains libz.so.1 which is required for plotting in Rstudio
 
     port=${args[port]}
-    #rstudio_server_user=pjh
-
     WD=${args[workingdir]}
 
 
@@ -150,9 +154,9 @@ function main {
     bg_pids+=($!)
 
     ## run main program
-            #--server-user $rstudio_server_user \
     (
         $rserver_path \
+            --server-user $USER \
             --server-working-dir=/ \
             --server-daemonize=0 \
             --server-pid-file=${WD}/var/run/rstudio-server.pid \
