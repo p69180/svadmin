@@ -1,6 +1,7 @@
 import os
 import pprint
 import argparse
+import socket
 
 import utils
 
@@ -21,8 +22,42 @@ MAX_PROCS_DF_KEYS = [
 ]
 
 
+GROUPED_DF_KEYS = [
+    'pcpu_user',
+    'pcpu_system',
+    'pcpu_iowait',
+    'pcpu_total',
+    'num_RD',
+
+    'rss_GB',
+    'pss_GB',
+
+    'read_MB_per_sec',
+    'written_MB_per_sec',
+]
+
+
 def argument_parsing():
+    def nodes_postprocess(x):
+        if x is None:
+            return [socket.gethostname()]
+        else:
+            return x.split(',')
+
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--nodes',
+        help=f'Comma-separated string indicating target nodes. (e.g. bnode2,bnode4) Default: current node.',
+        default=None,
+        type=nodes_postprocess,
+        dest='nodes',
+    )
+    parser.add_argument(
+        '--group',
+        help=f'If set, printed dataframe is grouped by user and hostname.',
+        action='store_true',
+        dest='group',
+    )
     parser.add_argument(
         '-i', '--interval', 
         help=f'Time interval (in seconds) to collect cpu usage data.',
@@ -50,6 +85,9 @@ def argument_parsing():
 
 def main():
     args = argument_parsing()
+
+    snapshot_df = utils.get_snapshot_df(nodes=args.nodes)
+    grouped_snapshot_df = snapshot_df.groupby(['hostname', 'user'])[GROUPED_DF_KEYS].sum()
 
     snapshot = utils.get_byuser_snapshot(interval=args.interval, gross_cpu_percents=False)
     maxcpu_df = utils.pick_maxcpu_procs(snapshot['proc_snapshot_df'], n=args.num_maxproc)

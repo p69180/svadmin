@@ -16,10 +16,51 @@ import pickle
 import uuid
 import shlex
 import textwrap
+import json
+import warnings
+import pwd
+import multiprocessing
 
 import psutil
 import numpy as np
 import pandas as pd
+
+
+ALL_NODES = [f'bnode{x}' for x in range(17)]
+
+SNAPSHOT_DF_KEYS = [
+    'hostname',
+    'user',
+
+    'pcpu_user',
+    'pcpu_system',
+    'pcpu_iowait',
+    'pcpu_total',
+    'num_RD',
+
+    'rss_GB',
+    'pss_GB',
+
+    'read_MB_per_sec',
+    'written_MB_per_sec',
+
+    'cmd',
+]
+
+
+SNAPSHOT_DF_GROUPBY_KEYS = [
+    'pcpu_user',
+    'pcpu_system',
+    'pcpu_iowait',
+    'pcpu_total',
+    'num_RD',
+
+    'rss_GB',
+    'pss_GB',
+
+    'read_MB_per_sec',
+    'written_MB_per_sec',
+]
 
 
 ##########
@@ -30,6 +71,106 @@ def make_tmpfile_path(where=os.getcwd(), prefix=None, suffix=None):
     fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=where)
     os.close(fd)
     return path
+
+
+def get_username():
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def check_root():
+    return os.geteuid() == 0
+
+
+def rootcheck():
+    if not check_root():
+        print(f'User must be root.')
+        sys.exit(1)
+
+
+def rootcheck_ask_force():
+    if not check_root():
+        answer = input(f'User is not root. If you want to proceed anyway, press "y". ')
+        if answer == 'y':
+            pass
+        else:
+            sys.exit(1)
+
+
+################
+# run over ssh #
+################
+
+def run_over_ssh(hostname, func, args=tuple(), kwargs=dict()):
+    # pickle args and kwargs
+    uniqid = uuid.uuid4()
+    args_pklpath = make_tmpfile_path(
+        prefix=f'runoverssh_args_{uniqid}_', suffix='.pickle',
+    )
+    kwargs_pklpath = make_tmpfile_path(
+        prefix=f'runoverssh_kwargs_{uniqid}_', suffix='.pickle',
+    )
+    result_pklpath = make_tmpfile_path(
+        prefix=f'runoverssh_result_{uniqid}_', suffix='.pickle',
+    )
+    with open(args_pklpath, 'wb') as f:
+        pickle.dump(args, f)
+    with open(kwargs_pklpath, 'wb') as f:
+        pickle.dump(kwargs, f)
+
+    # make parameters
+    module = inspect.getmodule(func)
+    assert hasattr(module, '__file__')
+    module_path = os.path.abspath(module.__file__)
+    module_dir = os.path.dirname(module_path)
+    module_name = re.sub('\.py$', '', os.path.basename(module_path))
+
+    funcname = func.__name__
+
+    python = sys.executable
+    remotearg_pycmd = textwrap.dedent(
+        f'''\
+        import sys
+        import os
+        import importlib
+        import pickle
+        import json
+        sys.path.append({repr(module_dir)})
+        module = importlib.import_module({repr(module_name)})
+        func = getattr(module, {repr(funcname)})
+        with open({repr(args_pklpath)}, 'rb') as f:
+            args = pickle.load(f)
+        with open({repr(kwargs_pklpath)}, 'rb') as f:
+            kwargs = pickle.load(f)
+        result = func.__call__(*args, **kwargs)
+        with open({repr(result_pklpath)}, 'wb') as f:
+            pickle.dump(result, f)
+        '''
+    )
+        # tmpfile paths for pickle are removed here
+    remoteargs = shlex.join([python, '-c', remotearg_pycmd])
+    
+    p = subprocess.run(
+        ['ssh', hostname, remoteargs],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if p.returncode == 0:
+        with open(result_pklpath, 'rb') as f:
+            result = pickle.load(f)
+    else:
+        this_func_name = inspect.stack()[0].function
+        msg = f'"{this_func_name}" failed; hostname={hostname}, function={func}, stderr={p.stderr}'
+        print(msg)
+        #warnings.warn(msg)
+        result = None
+
+    os.remove(args_pklpath)
+    os.remove(kwargs_pklpath)
+    os.remove(result_pklpath)
+
+    return result
 
 
 ############
@@ -58,6 +199,34 @@ def print_err(*args, stderr=True, files=None, **kwargs):
 
 def print_timestamp(*args, **kwargs):
     print_err(f'[{get_timestamp()}]', *args, **kwargs)
+
+
+########
+# kill #
+########
+
+def kill_proc(pidlist, timeout=3, raise_on_absent=False):
+    proclist = [psutil.Process(x) for x in pidlist]
+    for proc in proclist:
+        try:
+            proc.terminate()
+        except psutil.NoSuchProcess:
+            if raise_on_absent:
+                raise
+            else:
+                pass
+
+    gone, alive = psutil.wait_procs(proclist, timeout=timeout, callback=None)
+    if len(alive) > 0:
+        for proc in alive:
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                if raise_on_absent:
+                    raise
+                else:
+                    pass
+        time.sleep(1)
 
 
 ######
@@ -481,331 +650,6 @@ def get_load_snapshot():
     return all_df['state'].isin(['R', 'D']).sum()
 
 
-
-##########################
-# functions using psutil #
-##########################
-
-def get_byuser_mem():
-    df_data = list()
-    for proc in psutil.process_iter(
-        attrs=(
-            'memory_full_info',
-            'cmdline',
-            'username',
-        ),
-    ):
-        rowdict = dict()
-        rowdict['pid'] = proc.pid
-        rowdict['pss_bytes'] = proc.info['memory_full_info'].pss
-        rowdict['pss_GB'] = round(rowdict['pss_bytes'] / 1024**3, 3)
-        rowdict['rss_bytes'] = proc.info['memory_full_info'].rss
-        rowdict['rss_GB'] = round(rowdict['rss_bytes'] / 1024**3, 3)
-        rowdict['user'] = proc.info['username']
-        rowdict['cmd'] = ' '.join(proc.info['cmdline'])
-
-        df_data.append(rowdict)
-
-    all_df = pd.DataFrame.from_records(df_data)
-    byuser_dfs = dict(
-        (key, subdf) for key, subdf in all_df.groupby('user')
-    )
-
-    return all_df, byuser_dfs
-
-
-def kill_proc(pidlist, timeout=3, raise_on_absent=False):
-    proclist = [psutil.Process(x) for x in pidlist]
-    for proc in proclist:
-        try:
-            proc.terminate()
-        except psutil.NoSuchProcess:
-            if raise_on_absent:
-                raise
-            else:
-                pass
-
-    gone, alive = psutil.wait_procs(proclist, timeout=timeout, callback=None)
-    if len(alive) > 0:
-        for proc in alive:
-            try:
-                proc.kill()
-            except psutil.NoSuchProcess:
-                if raise_on_absent:
-                    raise
-                else:
-                    pass
-        time.sleep(1)
-
-
-def get_cpu_usages(interval=0.2):
-    result = list()
-    for idx, x in enumerate(psutil.cpu_times_percent(interval=interval, percpu=True)):
-        pctsum = sum(x)
-        x_asdict = x._asdict()
-        new_data = dict((key, val / pctsum) for (key, val) in x_asdict.items())
-        #max_key = max(x_asdict.items(), key=(lambda x: x[1]))[0]
-        #string = '(' + ', '.join(f'{key}={val}' for (key, val) in new_data.items()) + ')'
-        result.append(new_data)
-
-    return result
-
-
-def get_mem_usage(proc=None, pid=None):
-    """Returns in kilobytes
-    By using pss, shared memory sizes are not reduntantly counted. Useful for Rstudio or Jupyter spawning subprocesses.
-    """
-    if proc is None:
-        proc = psutil.Process(pid)
-
-    rss = 0
-    pss = 0
-    for child in ([proc] + proc.children(recursive=True)):
-        meminfo = child.memory_full_info()
-        rss += meminfo.rss
-        pss += meminfo.pss
-    
-    rss /= 1024**2
-    pss /= 1024**2
-
-    return rss, pss
-    #return pss
-        
-
-def check_kernel_process(proc):
-    return proc.ppid() == 2
-
-
-###
-
-# helpers
-
-def get_process_data(proclist, methodname):
-    result = list()
-    for x in proclist:
-        try:
-            item = getattr(x, methodname)()
-        except psutil.NoSuchProcess:
-            item = None
-        result.append(item)
-    return result
-
-
-def get_cputimes(proclist):
-    return get_process_data(proclist, 'cpu_times')
-
-
-def get_iocounters(proclist):
-    return get_process_data(proclist, 'io_counters')
-
-
-def diff_helper(attrname, data_begin, data_end, interval):
-    diffresult = list()
-    for x1, x2 in zip(data_begin, data_end):
-        if (x2 is None) or (x1 is None):
-            diffitem = np.nan
-        else:
-            diffitem = getattr(x2, attrname) - getattr(x1, attrname)
-        diffresult.append(diffitem)
-    return np.asarray(diffresult, dtype=float) / interval
-
-
-def diff_cputimes(cputimes_begin, cputimes_end, interval):
-    return {
-        'user': (100 * diff_helper('user', cputimes_begin, cputimes_end, interval)),
-        'system': (100 * diff_helper('system', cputimes_begin, cputimes_end, interval)),
-        'iowait': (100 * diff_helper('iowait', cputimes_begin, cputimes_end, interval)),
-    }
-
-
-def diff_iocounters(iocounters_begin, iocounters_end, interval):
-    return {
-        'read': diff_helper('read_bytes', iocounters_begin, iocounters_end, interval),
-        'write': diff_helper('write_bytes', iocounters_begin, iocounters_end, interval),
-    }
-
-
-# main ones
-
-def get_pcpus(proclist, interval=0.2):
-    cputimes_begin = get_cputimes(proclist)
-    time.sleep(interval)
-    cputimes_end = get_cputimes(proclist)
-    result = diff_cputimes(cputimes_begin, cputimes_end, interval)
-    return result
-
-
-def get_iorates(proclist, interval=0.2):
-    """Args:
-        proc: psutil.Process object
-    Returns:
-        bytes / sec
-    """
-    iocnts_begin = get_iocounters(proclist)
-    time.sleep(interval)
-    iocnts_end = get_iocounters(proclist)
-    iorates = diff_iocounters(iocounters_begin, iocounters_end, interval)
-    return iorates
-
-
-def get_pcpus_iorates(proclist, interval=0.2):
-    cputimes_begin = get_cputimes(proclist)
-    iocnts_begin = get_iocounters(proclist)
-    time.sleep(interval)
-    cputimes_end = get_cputimes(proclist)
-    iocnts_end = get_iocounters(proclist)
-
-    pcpus = diff_cputimes(cputimes_begin, cputimes_end, interval)
-    iorates = diff_iocounters(iocnts_begin, iocnts_end, interval)
-    return pcpus, iorates
-
-
-RD_STATUSES = [psutil.STATUS_RUNNING, psutil.STATUS_DISK_SLEEP]
-
-
-def get_proc_snapshot_noncpu():
-    proc_snapshot = list()
-    for proc in psutil.process_iter(
-        attrs=(
-            'cmdline',
-            'memory_full_info',
-            #'name',
-            'pid',
-            #'status',
-            'threads',
-            'username',
-        ),
-    ):
-        procinfo = dict()
-        #procinfo['name'] = proc.info['name']
-        procinfo['pid'] = proc.info['pid']
-        procinfo['process'] = proc
-        procinfo['user'] = proc.info['username']
-        procinfo['cmd'] = proc.info['cmdline']
-        procinfo['tids'] = [x.id for x in proc.info['threads']]
-
-        if proc.info['memory_full_info'] is not None:
-            procinfo['rss_bytes'] = proc.info['memory_full_info'].rss
-            procinfo['rss_GB'] = round(procinfo['rss_bytes'] / 1024**3, 3)
-            procinfo['pss_bytes'] = proc.info['memory_full_info'].pss
-            procinfo['pss_GB'] = round(procinfo['pss_bytes'] / 1024**3, 3)
-
-        procinfo['thread_states'] = list()
-        for x in procinfo['tids']:
-            try:
-                state = psutil.Process(x).status()
-            except psutil.NoSuchProcess:
-                pass
-            else:
-                procinfo['thread_states'].append(state)
-        procinfo['num_RD'] = sum((x in RD_STATUSES) for x in procinfo['thread_states'])
-
-        proc_snapshot.append(procinfo)
-
-    return proc_snapshot
-
-
-def get_proc_snapshot(interval=0.2, gross_cpu_percents=False):
-    proc_snapshot = get_proc_snapshot_noncpu()
-
-    proclist = [x['process'] for x in proc_snapshot]
-    if gross_cpu_percents:
-        _ = psutil.cpu_percent(percpu=True)
-    all_pcpus, all_iorates = get_pcpus_iorates(proclist, interval=interval)
-    if gross_cpu_percents:
-        gross_pcpus = psutil.cpu_percent(percpu=True)
-    else:
-        gross_pcpus = None
-
-    for (
-        procinfo, 
-        pcpu_u, 
-        pcpu_s, 
-        pcpu_i,
-        r_rate,
-        w_rate,
-    ) in zip(
-        proc_snapshot,
-        all_pcpus['user'],
-        all_pcpus['system'],
-        all_pcpus['iowait'],
-        all_iorates['read'],
-        all_iorates['write'],
-    ):
-        procinfo['pcpu_user'] = pcpu_u
-        procinfo['pcpu_system'] = pcpu_s
-        procinfo['pcpu_iowait'] = pcpu_i
-        procinfo['pcpu_total'] = pcpu_u + pcpu_s + pcpu_i
-
-        procinfo['read_bytes_per_sec'] = r_rate
-        procinfo['written_bytes_per_sec'] = w_rate
-        procinfo['read_MB_per_sec'] = round(r_rate / 1024**2, 3)
-        procinfo['written_MB_per_sec'] = round(w_rate / 1024**2, 3)
-
-    return proc_snapshot, gross_pcpus
-
-
-def group_procinfo(proc_snapshot):
-    procinfo_bypid = dict((x['pid'], x) for x in proc_snapshot)
-    procinfo_byuser = dict()
-    for user, subiter in itertools.groupby(
-        sorted(proc_snapshot, key=operator.itemgetter('user')),
-        key=operator.itemgetter('user'),
-    ):
-        procinfo_byuser[user] = list(subiter)
-
-    return procinfo_bypid, procinfo_byuser
-
- 
-BYUSER_KEYS = [
-    'pcpu_user',
-    'pcpu_system',
-    'pcpu_iowait',
-    'pcpu_total',
-    'num_RD',
-
-    'rss_GB',
-    'pss_GB',
-
-    'read_MB_per_sec',
-    'written_MB_per_sec',
-]
-
-
-def get_byuser_snapshot(interval=0.2, gross_cpu_percents=False):
-    proc_snapshot, gross_pcpus = get_proc_snapshot(
-        interval=interval, gross_cpu_percents=gross_cpu_percents,
-    )
-    proc_snapshot_df = pd.DataFrame.from_records(proc_snapshot)
-    grouped_df = proc_snapshot_df.groupby('user')[list(BYUSER_KEYS)].sum()
-    sum_row = grouped_df.sum(axis=0).to_frame(name='SUM').T
-    grouped_df = pd.concat(
-        [grouped_df, sum_row],
-        axis=0,
-        ignore_index=False,
-    )
-
-    result = {
-        'proc_snapshot': proc_snapshot,
-        'proc_snapshot_df': proc_snapshot_df,
-        'grouped_df': grouped_df,
-        'gross_pcpus': gross_pcpus,  # a list with an element for each cpu
-    }
-    return result
-
-    
-def get_byuser_snapshot_wopandas(interval=0.2):
-    proc_snapshot, gross_pcpus = get_proc_snapshot(interval=interval)
-    procinfo_bypid, procinfo_byuser = group_procinfo(proc_snapshot)
-    result = dict()
-    for user, procinfo_list in procinfo_byuser.items():
-        userdata = dict()
-        for key in BYUSER_KEYS:
-            userdata[key] = sum(x[key] for x in procinfo_list)
-            result[user] = userdata
-
-    return result
-
         
 # pick max mem/cpu processes
 
@@ -820,67 +664,6 @@ def pick_maxmem_procs(proc_snapshot_df, n=1):
 
 
 
-################
-# run over ssh #
-################
-
-def foo(x):
-    print(socket.gethostname())
-    print(x)
-
-
-def run_over_ssh(hostname, func, args=tuple(), kwargs=dict()):
-    # pickle args and kwargs
-    uniqid = uuid.uuid4()
-    args_pklpath = make_tmpfile_path(
-        prefix=f'runoverssh_args_{uniqid}_', suffix='.pickle',
-    )
-    kwargs_pklpath = make_tmpfile_path(
-        prefix=f'runoverssh_kwargs_{uniqid}_', suffix='.pickle',
-    )
-    with open(args_pklpath, 'wb') as f:
-        pickle.dump(args, f)
-    with open(kwargs_pklpath, 'wb') as f:
-        pickle.dump(kwargs, f)
-
-    # make parameters
-    module = inspect.getmodule(func)
-    assert hasattr(module, '__file__')
-    module_path = os.path.abspath(module.__file__)
-    module_dir = os.path.dirname(module_path)
-    module_name = re.sub('\.py$', '', os.path.basename(module_path))
-
-    funcname = func.__name__
-
-    python = sys.executable
-    rmtarg_pycmd = textwrap.dedent(
-        f'''\
-        import sys
-        import os
-        import importlib
-        import pickle
-        sys.path.append({repr(module_dir)})
-        module = importlib.import_module({repr(module_name)})
-        func = getattr(module, {repr(funcname)})
-        with open({repr(args_pklpath)}, 'rb') as f:
-            args = pickle.load(f)
-        os.remove({repr(args_pklpath)})
-        with open({repr(kwargs_pklpath)}, 'rb') as f:
-            kwargs = pickle.load(f)
-        os.remove({repr(kwargs_pklpath)})
-        func.__call__(*args, **kwargs)
-        '''
-    )
-        # tmpfile paths for pickle are removed here
-    rmtargs = shlex.join([python, '-c', rmtarg_pycmd])
-    
-    p = subprocess.Popen(
-        ['ssh', hostname, rmtargs],
-        text=True,
-    )
-
-    return p
-
 
 ########################
 # logging kill results #
@@ -891,6 +674,5 @@ def write_log(killed_procs, logdir):
     os.makedirs(host_logdir, exist_ok=True)
     logpath = os.path.join(host_logdir, datetime.datetime.now().isoformat())
     killed_procs.to_csv(logpath, sep='\t', header=True, index=False)
-
 
 
