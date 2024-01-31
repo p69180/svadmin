@@ -87,9 +87,12 @@ def rootcheck():
         sys.exit(1)
 
 
-def rootcheck_ask_force():
+def rootcheck_ask_force(prompt=None):
+    if prompt is None:
+        prompt = f'User is not root. If you want to proceed anyway, press "y". '
+
     if not check_root():
-        answer = input(f'User is not root. If you want to proceed anyway, press "y". ')
+        answer = input(prompt)
         if answer == 'y':
             pass
         else:
@@ -122,7 +125,7 @@ def run_over_ssh(hostname, func, args=tuple(), kwargs=dict()):
     assert hasattr(module, '__file__')
     module_path = os.path.abspath(module.__file__)
     module_dir = os.path.dirname(module_path)
-    module_name = re.sub('\.py$', '', os.path.basename(module_path))
+    module_name = re.sub(r'\.py$', '', os.path.basename(module_path))
 
     funcname = func.__name__
 
@@ -491,7 +494,7 @@ def run_ps_read_with_pandas(
     df = pd.read_csv(
         #p.stdout, 
         io.StringIO(p.stdout),
-        sep='\s+', 
+        sep=r'\s+', 
         header=0,
         names=header,
         dtype=dtype,
@@ -618,7 +621,7 @@ def run_ps_read_with_pandas(
     df = pd.read_csv(
         #p.stdout, 
         io.StringIO(p.stdout),
-        sep='\s+', 
+        sep=r'\s+', 
         header=0,
         names=header,
         dtype=dtype,
