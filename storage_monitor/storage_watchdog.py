@@ -124,13 +124,16 @@ def rootwarn():
 def make_outdir_path(args):
     if args.full_outdir is None:
         datestr = datetime.datetime.now().isoformat()
-        outdir_bname = f'{datestr}_mtime_{args.mtime}_size_{args.size}'
+        prefix = 'storagemonitor_'
+        outdir_bname = f'storagemonitor_{datestr}_mtime_{args.mtime}_size_{args.size}'
         outdir_path = os.path.join(args.outdir_topdir, outdir_bname)
     else:
         outdir_path = args.full_outdir
 
     #os.makedirs(outdir_path)
     #print(f'Output directory: {outdir_path}')
+
+    assert not os.path.exists(outdir_path)
 
     return outdir_path
 
