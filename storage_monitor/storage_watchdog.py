@@ -65,7 +65,7 @@ def argument_parsing():
     )
     parser_run.add_argument(
         '--nproc', 
-        default=10,
+        default=1,
         type=int,
         required=False,
         help=f'Number of parallelization.',
